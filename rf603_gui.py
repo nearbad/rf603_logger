@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QMessageBox, QProgressBar, QTabWidget, QCheckBox,
                              QSplitter, QAction, QMenuBar, QStatusBar, QDialog,
                              QFormLayout, QDialogButtonBox, QListWidget, QToolBar,
-                             QRadioButton, QButtonGroup, QSlider)
+                             QRadioButton, QButtonGroup, QSlider, QInputDialog)
 from PyQt5.QtCore import Qt, QThread, pyqtSignal, QTimer, QSettings
 from PyQt5.QtGui import QIcon, QFont, QColor, QPalette
 
@@ -454,6 +454,308 @@ class SettingsDialog(QDialog):
         super().accept()
 
 
+class ManualCropDialog(QDialog):
+    """Диалог ручной обрезки данных"""
+
+    def __init__(self, analyzer, parent=None):
+        super().__init__(parent)
+        self.analyzer = analyzer
+        self.setWindowTitle("Ручная обрезка данных")
+        self.setModal(True)
+        self.resize(400, 300)
+
+        self.init_ui()
+
+    def init_ui(self):
+        """Инициализация UI"""
+        layout = QVBoxLayout()
+
+        # Информация о данных
+        info_label = QLabel(f"<b>Всего точек данных:</b> {len(self.analyzer.processed_data)}")
+        layout.addWidget(info_label)
+
+        if len(self.analyzer.processed_data) > 0:
+            time_range = self.analyzer.processed_data['Временная_метка'].iloc[-1]
+            time_info = QLabel(f"<b>Временной диапазон:</b> 0.0 - {time_range:.3f} сек")
+            layout.addWidget(time_info)
+
+        # Вкладки для разных методов обрезки
+        tabs = QTabWidget()
+
+        # Вкладка "По времени"
+        time_tab = QWidget()
+        time_layout = QFormLayout()
+
+        self.start_time_spin = QDoubleSpinBox()
+        self.start_time_spin.setRange(0, 999999)
+        self.start_time_spin.setDecimals(3)
+        self.start_time_spin.setSuffix(" сек")
+
+        self.end_time_spin = QDoubleSpinBox()
+        self.end_time_spin.setRange(0, 999999)
+        self.end_time_spin.setDecimals(3)
+        self.end_time_spin.setSuffix(" сек")
+
+        if len(self.analyzer.processed_data) > 0:
+            self.end_time_spin.setValue(self.analyzer.processed_data['Временная_метка'].iloc[-1])
+
+        time_layout.addRow("Начало:", self.start_time_spin)
+        time_layout.addRow("Конец:", self.end_time_spin)
+
+        crop_time_btn = QPushButton("✂️ Обрезать по времени")
+        crop_time_btn.clicked.connect(self.crop_by_time)
+        time_layout.addRow("", crop_time_btn)
+
+        time_tab.setLayout(time_layout)
+        tabs.addTab(time_tab, "По времени")
+
+        # Вкладка "По точкам"
+        points_tab = QWidget()
+        points_layout = QFormLayout()
+
+        self.start_point_spin = QSpinBox()
+        self.start_point_spin.setRange(0, len(self.analyzer.processed_data) - 1)
+
+        self.end_point_spin = QSpinBox()
+        self.end_point_spin.setRange(0, len(self.analyzer.processed_data) - 1)
+        self.end_point_spin.setValue(len(self.analyzer.processed_data) - 1)
+
+        points_layout.addRow("Начальная точка:", self.start_point_spin)
+        points_layout.addRow("Конечная точка:", self.end_point_spin)
+
+        crop_points_btn = QPushButton("✂️ Обрезать по точкам")
+        crop_points_btn.clicked.connect(self.crop_by_points)
+        points_layout.addRow("", crop_points_btn)
+
+        points_tab.setLayout(points_layout)
+        tabs.addTab(points_tab, "По точкам")
+
+        layout.addWidget(tabs)
+
+        # Кнопки
+        buttons_layout = QHBoxLayout()
+
+        reset_btn = QPushButton("🔄 Сбросить к исходным")
+        reset_btn.clicked.connect(self.reset_data)
+        buttons_layout.addWidget(reset_btn)
+
+        close_btn = QPushButton("Закрыть")
+        close_btn.clicked.connect(self.accept)
+        buttons_layout.addWidget(close_btn)
+
+        layout.addLayout(buttons_layout)
+
+        self.setLayout(layout)
+
+    def crop_by_time(self):
+        """Обрезка по времени"""
+        start_time = self.start_time_spin.value()
+        end_time = self.end_time_spin.value()
+
+        if start_time >= end_time:
+            QMessageBox.warning(self, "Ошибка", "Начало должно быть меньше конца!")
+            return
+
+        if self.analyzer.crop_by_time(start_time, end_time):
+            QMessageBox.information(self, "Успех",
+                f"Данные обрезаны: {start_time:.3f} - {end_time:.3f} сек\n"
+                f"Осталось точек: {len(self.analyzer.processed_data)}")
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось обрезать данные!")
+
+    def crop_by_points(self):
+        """Обрезка по точкам"""
+        start_point = self.start_point_spin.value()
+        end_point = self.end_point_spin.value()
+
+        if start_point >= end_point:
+            QMessageBox.warning(self, "Ошибка", "Начальная точка должна быть меньше конечной!")
+            return
+
+        if self.analyzer.crop_by_points(start_point, end_point):
+            QMessageBox.information(self, "Успех",
+                f"Данные обрезаны: точки {start_point} - {end_point}\n"
+                f"Осталось точек: {len(self.analyzer.processed_data)}")
+            self.accept()
+        else:
+            QMessageBox.critical(self, "Ошибка", "Не удалось обрезать данные!")
+
+    def reset_data(self):
+        """Сброс к исходным данным"""
+        reply = QMessageBox.question(self, "Подтверждение",
+            "Вы уверены, что хотите сбросить все изменения?",
+            QMessageBox.Yes | QMessageBox.No)
+
+        if reply == QMessageBox.Yes:
+            if self.analyzer.reset_to_original():
+                QMessageBox.information(self, "Успех", "Данные сброшены к исходным!")
+                self.accept()
+            else:
+                QMessageBox.critical(self, "Ошибка", "Не удалось сбросить данные!")
+
+
+class PeakCorrectionDialog(QDialog):
+    """Диалог для ручной коррекции пиков"""
+
+    def __init__(self, analyzer, peaks, parent=None):
+        super().__init__(parent)
+        self.analyzer = analyzer
+        self.original_peaks = peaks.copy() if peaks is not None else []
+        self.corrected_peaks = peaks.copy() if peaks is not None else []
+
+        self.setWindowTitle("Ручная коррекция пиков")
+        self.setModal(True)
+        self.resize(900, 600)
+
+        self.init_ui()
+        self.plot_peaks()
+
+    def init_ui(self):
+        """Инициализация UI"""
+        layout = QVBoxLayout()
+
+        # Заголовок
+        title = QLabel("<h3>Коррекция пиков колебаний</h3>")
+        layout.addWidget(title)
+
+        info = QLabel(
+            "Используйте график для просмотра найденных пиков.\n"
+            "Добавляйте/удаляйте пики в таблице ниже или вводите вручную."
+        )
+        layout.addWidget(info)
+
+        # График
+        self.canvas = MplCanvas(self, width=8, height=4, dpi=100)
+        toolbar = NavigationToolbar(self.canvas, self)
+        layout.addWidget(toolbar)
+        layout.addWidget(self.canvas)
+
+        # Таблица пиков
+        peaks_group = QGroupBox("Список пиков (номера точек)")
+        peaks_layout = QVBoxLayout()
+
+        self.peaks_table = QTableWidget()
+        self.peaks_table.setColumnCount(3)
+        self.peaks_table.setHorizontalHeaderLabels(['№', 'Индекс точки', 'Время (сек)'])
+        self.peaks_table.setMaximumHeight(150)
+
+        # Авто-размер столбцов
+        header = self.peaks_table.horizontalHeader()
+        header.setSectionResizeMode(0, header.ResizeToContents)
+        header.setSectionResizeMode(1, header.Stretch)
+        header.setSectionResizeMode(2, header.Stretch)
+
+        peaks_layout.addWidget(self.peaks_table)
+
+        # Кнопки управления пиками
+        peaks_buttons = QHBoxLayout()
+
+        add_peak_btn = QPushButton("➕ Добавить пик")
+        add_peak_btn.clicked.connect(self.add_peak)
+        peaks_buttons.addWidget(add_peak_btn)
+
+        remove_peak_btn = QPushButton("➖ Удалить выбранный")
+        remove_peak_btn.clicked.connect(self.remove_peak)
+        peaks_buttons.addWidget(remove_peak_btn)
+
+        sort_btn = QPushButton("🔄 Сортировать")
+        sort_btn.clicked.connect(self.sort_peaks)
+        peaks_buttons.addWidget(sort_btn)
+
+        peaks_layout.addLayout(peaks_buttons)
+        peaks_group.setLayout(peaks_layout)
+        layout.addWidget(peaks_group)
+
+        # Кнопки OK/Cancel
+        buttons = QDialogButtonBox(QDialogButtonBox.Ok | QDialogButtonBox.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+        self.setLayout(layout)
+
+        # Заполняем таблицу
+        self.update_table()
+
+    def plot_peaks(self):
+        """Отображение графика с пиками"""
+        self.canvas.clear_plot()
+
+        data = self.analyzer.processed_data
+        time_data = data['Временная_метка'].values
+        distance_data = data['Расстояние_мм'].values
+
+        # График данных
+        self.canvas.axes.plot(time_data, distance_data, 'b-', linewidth=1.5, label='Данные')
+
+        # Отмечаем пики
+        if len(self.corrected_peaks) > 0:
+            peak_times = time_data[self.corrected_peaks]
+            peak_values = distance_data[self.corrected_peaks]
+            self.canvas.axes.plot(peak_times, peak_values, 'ro', markersize=8, label=f'Пики ({len(self.corrected_peaks)})')
+
+            # Нумеруем пики
+            for i, (t, v) in enumerate(zip(peak_times, peak_values)):
+                self.canvas.axes.annotate(f'{i+1}', (t, v),
+                    textcoords="offset points", xytext=(0,10), ha='center',
+                    fontsize=8, color='red', fontweight='bold')
+
+        self.canvas.axes.set_xlabel('Время (сек)', fontsize=10)
+        self.canvas.axes.set_ylabel('Расстояние (мм)', fontsize=10)
+        self.canvas.axes.set_title(f'Коррекция пиков (всего: {len(self.corrected_peaks)})', fontsize=12, fontweight='bold')
+        self.canvas.axes.legend()
+        self.canvas.axes.grid(True, alpha=0.3, linestyle='--')
+        self.canvas.draw()
+
+    def update_table(self):
+        """Обновление таблицы пиков"""
+        self.peaks_table.setRowCount(len(self.corrected_peaks))
+
+        data = self.analyzer.processed_data
+        time_data = data['Временная_метка'].values
+
+        for i, peak_idx in enumerate(self.corrected_peaks):
+            self.peaks_table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
+            self.peaks_table.setItem(i, 1, QTableWidgetItem(str(peak_idx)))
+            self.peaks_table.setItem(i, 2, QTableWidgetItem(f"{time_data[peak_idx]:.3f}"))
+
+    def add_peak(self):
+        """Добавление пика"""
+        peak_idx, ok = QInputDialog.getInt(self, "Добавить пик",
+            f"Введите номер точки (0-{len(self.analyzer.processed_data)-1}):",
+            0, 0, len(self.analyzer.processed_data)-1)
+
+        if ok:
+            if peak_idx not in self.corrected_peaks:
+                self.corrected_peaks.append(peak_idx)
+                self.sort_peaks()
+                self.update_table()
+                self.plot_peaks()
+            else:
+                QMessageBox.warning(self, "Предупреждение", "Этот пик уже есть в списке!")
+
+    def remove_peak(self):
+        """Удаление выбранного пика"""
+        current_row = self.peaks_table.currentRow()
+        if current_row >= 0:
+            del self.corrected_peaks[current_row]
+            self.update_table()
+            self.plot_peaks()
+        else:
+            QMessageBox.warning(self, "Предупреждение", "Выберите пик для удаления!")
+
+    def sort_peaks(self):
+        """Сортировка пиков"""
+        self.corrected_peaks.sort()
+        self.update_table()
+        self.plot_peaks()
+
+    def get_corrected_peaks(self):
+        """Получить откорректированные пики"""
+        return self.corrected_peaks
+
+
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
 
@@ -465,6 +767,7 @@ class MainWindow(QMainWindow):
         self.record_thread = None
         self.is_recording = False
         self.current_file = None
+        self.analyzer = None  # Для хранения анализатора данных
 
         # Данные для графика
         self.time_data = deque(maxlen=10000)
@@ -738,8 +1041,19 @@ class MainWindow(QMainWindow):
         self.open_file_btn = QPushButton("📂 Открыть файл для анализа")
         self.open_file_btn.clicked.connect(self.open_file_for_analysis)
 
+        # Кнопки ручной обработки
+        self.manual_crop_btn = QPushButton("✂️ Ручная обрезка данных")
+        self.manual_crop_btn.setEnabled(False)
+        self.manual_crop_btn.clicked.connect(self.manual_crop_data)
+
+        self.manual_peaks_btn = QPushButton("📍 Ручная коррекция пиков")
+        self.manual_peaks_btn.setEnabled(False)
+        self.manual_peaks_btn.clicked.connect(self.manual_correct_peaks)
+
         analysis_layout.addWidget(self.analyze_btn)
         analysis_layout.addWidget(self.open_file_btn)
+        analysis_layout.addWidget(self.manual_crop_btn)
+        analysis_layout.addWidget(self.manual_peaks_btn)
 
         analysis_group.setLayout(analysis_layout)
         layout.addWidget(analysis_group)
@@ -1164,35 +1478,30 @@ class MainWindow(QMainWindow):
         try:
             self.log(f"🔬 Начало анализа файла: {filename}", "INFO")
 
-            analyzer = RF603OscillationAnalyzer()
+            # Создаем новый анализатор
+            self.analyzer = RF603OscillationAnalyzer()
 
-            if not analyzer.load_csv(filename):
+            if not self.analyzer.load_csv(filename):
                 raise Exception("Не удалось загрузить файл")
 
             # Всегда показываем загруженные данные на графике
-            self.log(f"📊 Загружено {len(analyzer.data)} точек данных", "INFO")
+            self.log(f"📊 Загружено {len(self.analyzer.data)} точек данных", "INFO")
+
+            # Включаем кнопки ручной обработки
+            self.manual_crop_btn.setEnabled(True)
+            self.manual_peaks_btn.setEnabled(True)
 
             # Отображаем данные на графике GUI
-            if hasattr(analyzer, 'data') and len(analyzer.data) > 0:
-                time_data = analyzer.data['Временная_метка'].values
-                distance_data = analyzer.data['Расстояние_мм'].values
+            self.update_analysis_plot()
 
-                self.canvas.clear_plot()
-                self.canvas.axes.plot(time_data, distance_data, 'b-', linewidth=1.5)
-                self.canvas.axes.set_xlabel('Время (сек)', fontsize=10)
-                self.canvas.axes.set_ylabel('Расстояние (мм)', fontsize=10)
-                self.canvas.axes.set_title('Загруженные данные', fontsize=12, fontweight='bold')
-                self.canvas.axes.grid(True, alpha=0.3, linestyle='--')
-                self.canvas.draw()
-
-            if not analyzer.normalize_data():
+            if not self.analyzer.normalize_data():
                 raise Exception("Ошибка нормировки данных")
 
             # Параметры из настроек
             settings = QSettings('RIFTEK', 'RF603Logger')
             duration = settings.value('duration', 1.0, type=float)
 
-            success, period, freq, peaks = analyzer.auto_crop_oscillations(duration)
+            success, period, freq, peaks = self.analyzer.auto_crop_oscillations(duration)
 
             # Обновляем результаты, если они есть
             if period is not None:
@@ -1205,10 +1514,10 @@ class MainWindow(QMainWindow):
             else:
                 self.result_freq.setText("-")
 
-            if analyzer.log_decrement is not None:
-                self.result_decrement.setText(f"{analyzer.log_decrement:.6f}")
-                self.result_damping.setText(f"{analyzer.damping_ratio:.6f}")
-                self.result_loss.setText(f"{analyzer.loss_factor:.6f}")
+            if self.analyzer.log_decrement is not None:
+                self.result_decrement.setText(f"{self.analyzer.log_decrement:.6f}")
+                self.result_damping.setText(f"{self.analyzer.damping_ratio:.6f}")
+                self.result_loss.setText(f"{self.analyzer.loss_factor:.6f}")
             else:
                 self.result_decrement.setText("-")
                 self.result_damping.setText("-")
@@ -1216,12 +1525,14 @@ class MainWindow(QMainWindow):
 
             if success:
                 self.log("✅ Анализ завершен успешно!", "SUCCESS")
+                # Обновляем график с результатами
+                self.update_analysis_plot()
                 # Показываем результаты в отдельном окне
-                analyzer.plot_results()
+                self.analyzer.plot_results()
             else:
                 # Частичный успех - данные загружены, но автоанализ не удался
                 self.log("⚠️ Автоматический анализ не удался (недостаточно пиков)", "WARNING")
-                self.log("💡 Используйте dekrement.py для ручной коррекции пиков", "INFO")
+                self.log("💡 Используйте кнопки ручной обработки ниже", "INFO")
 
                 msg = QMessageBox(self)
                 msg.setIcon(QMessageBox.Warning)
@@ -1240,6 +1551,115 @@ class MainWindow(QMainWindow):
         except Exception as e:
             self.log(f"❌ Ошибка анализа: {e}", "ERROR")
             QMessageBox.critical(self, "Ошибка", f"Ошибка при анализе:\n{e}")
+
+    def update_analysis_plot(self):
+        """Обновление графика с данными из analyzer"""
+        if self.analyzer and hasattr(self.analyzer, 'processed_data') and len(self.analyzer.processed_data) > 0:
+            time_data = self.analyzer.processed_data['Временная_метка'].values
+            distance_data = self.analyzer.processed_data['Расстояние_мм'].values
+
+            self.canvas.clear_plot()
+            self.canvas.axes.plot(time_data, distance_data, 'b-', linewidth=1.5, label='Данные')
+            self.canvas.axes.set_xlabel('Время (сек)', fontsize=10)
+            self.canvas.axes.set_ylabel('Расстояние (мм)', fontsize=10)
+            self.canvas.axes.set_title('Данные для анализа', fontsize=12, fontweight='bold')
+            self.canvas.axes.legend()
+            self.canvas.axes.grid(True, alpha=0.3, linestyle='--')
+            self.canvas.draw()
+
+    def manual_crop_data(self):
+        """Открыть диалог ручной обрезки данных"""
+        if not self.analyzer:
+            QMessageBox.warning(self, "Предупреждение",
+                "Сначала откройте файл для анализа!")
+            return
+
+        dialog = ManualCropDialog(self.analyzer, self)
+        if dialog.exec_() == QDialog.Accepted:
+            # Данные обновлены, обновляем график
+            self.update_analysis_plot()
+            self.log("✅ Данные обрезаны вручную", "SUCCESS")
+
+            # Пробуем снова выполнить автоанализ с новыми данными
+            try:
+                period, frequency, peaks = self.analyzer.calculate_period_frequency_improved()
+                if period is not None:
+                    self.result_period.setText(f"{period:.6f} сек")
+                    self.result_freq.setText(f"{frequency:.2f} Гц")
+
+                    if peaks is not None and len(peaks) >= 2:
+                        # Вычисляем логарифмический декремент
+                        self.analyzer.calculate_logarithmic_decrement(peaks)
+                        if self.analyzer.log_decrement:
+                            self.result_decrement.setText(f"{self.analyzer.log_decrement:.6f}")
+                            self.result_damping.setText(f"{self.analyzer.damping_ratio:.6f}")
+                            self.result_loss.setText(f"{self.analyzer.loss_factor:.6f}")
+
+                    self.log("✅ Повторный анализ завершен", "SUCCESS")
+            except Exception as e:
+                self.log(f"⚠️ Повторный анализ: {e}", "WARNING")
+
+    def manual_correct_peaks(self):
+        """Открыть диалог ручной коррекции пиков"""
+        if not self.analyzer:
+            QMessageBox.warning(self, "Предупреждение",
+                "Сначала откройте файл для анализа!")
+            return
+
+        # Сначала находим пики автоматически
+        try:
+            period, frequency, peaks = self.analyzer.calculate_period_frequency_improved()
+
+            if peaks is None or len(peaks) == 0:
+                # Нет автоматических пиков, предлагаем создать вручную
+                reply = QMessageBox.question(self, "Пики не найдены",
+                    "Автоматически пики не найдены. Хотите создать пики вручную?",
+                    QMessageBox.Yes | QMessageBox.No)
+
+                if reply == QMessageBox.Yes:
+                    peaks = []  # Пустой список для ручного заполнения
+                else:
+                    return
+        except Exception as e:
+            self.log(f"❌ Ошибка поиска пиков: {e}", "ERROR")
+            return
+
+        # Открываем диалог коррекции
+        dialog = PeakCorrectionDialog(self.analyzer, peaks, self)
+        if dialog.exec_() == QDialog.Accepted:
+            corrected_peaks = dialog.get_corrected_peaks()
+
+            if len(corrected_peaks) >= 2:
+                self.log(f"✅ Пики откорректированы: {len(corrected_peaks)} пиков", "SUCCESS")
+
+                # Пересчитываем с исправленными пиками
+                timestamps = self.analyzer.processed_data['Временная_метка'].values
+                periods = []
+                for i in range(len(corrected_peaks) - 1):
+                    period_val = timestamps[corrected_peaks[i + 1]] - timestamps[corrected_peaks[i]]
+                    periods.append(period_val)
+
+                if periods:
+                    avg_period = np.mean(periods)
+                    avg_frequency = 1.0 / avg_period if avg_period > 0 else 0
+
+                    self.result_period.setText(f"{avg_period:.6f} сек")
+                    self.result_freq.setText(f"{avg_frequency:.2f} Гц")
+
+                    # Вычисляем логарифмический декремент
+                    self.analyzer.calculate_logarithmic_decrement(corrected_peaks)
+                    if self.analyzer.log_decrement:
+                        self.result_decrement.setText(f"{self.analyzer.log_decrement:.6f}")
+                        self.result_damping.setText(f"{self.analyzer.damping_ratio:.6f}")
+                        self.result_loss.setText(f"{self.analyzer.loss_factor:.6f}")
+
+                    self.log("✅ Анализ с ручными пиками завершен", "SUCCESS")
+
+                    # Обновляем график
+                    self.update_analysis_plot()
+            else:
+                QMessageBox.warning(self, "Предупреждение",
+                    "Недостаточно пиков для анализа (минимум 2)!")
 
     def show_settings(self):
         """Показ диалога настроек"""
