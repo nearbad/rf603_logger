@@ -775,8 +775,14 @@ class MainWindow(QMainWindow):
         # Таблица данных
         self.data_table = QTableWidget()
         self.data_table.setColumnCount(3)
-        self.data_table.setHorizontalHeaderLabels(['Расстояние (мм)', 'Номер точки', 'Время (сек)'])
+        self.data_table.setHorizontalHeaderLabels(['Расст. (мм)', '№ точки', 'Время (сек)'])
         self.data_table.setMaximumHeight(250)
+
+        # Устанавливаем ширину столбцов
+        header = self.data_table.horizontalHeader()
+        header.setSectionResizeMode(0, header.Stretch)
+        header.setSectionResizeMode(1, header.Stretch)
+        header.setSectionResizeMode(2, header.Stretch)
 
         layout.addWidget(QLabel("Последние измерения:"))
         layout.addWidget(self.data_table)
@@ -1163,6 +1169,22 @@ class MainWindow(QMainWindow):
             if not analyzer.load_csv(filename):
                 raise Exception("Не удалось загрузить файл")
 
+            # Всегда показываем загруженные данные на графике
+            self.log(f"📊 Загружено {len(analyzer.data)} точек данных", "INFO")
+
+            # Отображаем данные на графике GUI
+            if hasattr(analyzer, 'data') and len(analyzer.data) > 0:
+                time_data = analyzer.data['Временная_метка'].values
+                distance_data = analyzer.data['Расстояние_мм'].values
+
+                self.canvas.clear_plot()
+                self.canvas.axes.plot(time_data, distance_data, 'b-', linewidth=1.5)
+                self.canvas.axes.set_xlabel('Время (сек)', fontsize=10)
+                self.canvas.axes.set_ylabel('Расстояние (мм)', fontsize=10)
+                self.canvas.axes.set_title('Загруженные данные', fontsize=12, fontweight='bold')
+                self.canvas.axes.grid(True, alpha=0.3, linestyle='--')
+                self.canvas.draw()
+
             if not analyzer.normalize_data():
                 raise Exception("Ошибка нормировки данных")
 
@@ -1172,22 +1194,48 @@ class MainWindow(QMainWindow):
 
             success, period, freq, peaks = analyzer.auto_crop_oscillations(duration)
 
-            if success:
+            # Обновляем результаты, если они есть
+            if period is not None:
                 self.result_period.setText(f"{period:.6f} сек")
-                self.result_freq.setText(f"{freq:.2f} Гц")
-
-                if analyzer.log_decrement:
-                    self.result_decrement.setText(f"{analyzer.log_decrement:.6f}")
-                    self.result_damping.setText(f"{analyzer.damping_ratio:.6f}")
-                    self.result_loss.setText(f"{analyzer.loss_factor:.6f}")
-
-                self.log("✅ Анализ завершен успешно!", "SUCCESS")
-
-                # Показываем результаты
-                analyzer.plot_results()
-
             else:
-                raise Exception("Не удалось выполнить автоматический анализ")
+                self.result_period.setText("-")
+
+            if freq is not None:
+                self.result_freq.setText(f"{freq:.2f} Гц")
+            else:
+                self.result_freq.setText("-")
+
+            if analyzer.log_decrement is not None:
+                self.result_decrement.setText(f"{analyzer.log_decrement:.6f}")
+                self.result_damping.setText(f"{analyzer.damping_ratio:.6f}")
+                self.result_loss.setText(f"{analyzer.loss_factor:.6f}")
+            else:
+                self.result_decrement.setText("-")
+                self.result_damping.setText("-")
+                self.result_loss.setText("-")
+
+            if success:
+                self.log("✅ Анализ завершен успешно!", "SUCCESS")
+                # Показываем результаты в отдельном окне
+                analyzer.plot_results()
+            else:
+                # Частичный успех - данные загружены, но автоанализ не удался
+                self.log("⚠️ Автоматический анализ не удался (недостаточно пиков)", "WARNING")
+                self.log("💡 Используйте dekrement.py для ручной коррекции пиков", "INFO")
+
+                msg = QMessageBox(self)
+                msg.setIcon(QMessageBox.Warning)
+                msg.setWindowTitle("Частичный результат")
+                msg.setText("Данные загружены и отображены на графике.")
+                msg.setInformativeText(
+                    "Автоматический анализ не удался (недостаточно пиков для расчета).\n\n"
+                    "Рекомендации:\n"
+                    "1. Проверьте данные на графике\n"
+                    "2. Используйте dekrement.py для ручной обработки\n"
+                    "3. Попробуйте изменить параметры анализа в настройках"
+                )
+                msg.setStandardButtons(QMessageBox.Ok)
+                msg.exec_()
 
         except Exception as e:
             self.log(f"❌ Ошибка анализа: {e}", "ERROR")
